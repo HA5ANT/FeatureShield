@@ -1,0 +1,51 @@
+# --------------------------
+# Python
+# --------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.log
+*.tmp
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# --------------------------
+# Jupyter and Notebooks
+# --------------------------
+.ipynb_checkpoints/
+*.ipynb_save
+
+# --------------------------
+# Data and models
+# --------------------------
+data/raw/
+data/interim/
+data/processed/
+models/*.joblib
+models/*.pkl
+models/*.h5
+
+# --------------------------
+# System / IDE files
+# --------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.bak
+*.swp
+
+# --------------------------
+# Misc
+# --------------------------
+*.zip
+*.tar
+*.gz
+*.7z
+*.rar
