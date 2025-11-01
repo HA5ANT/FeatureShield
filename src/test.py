@@ -10,8 +10,8 @@ chunksize = 100000
 label_counts = {0: 0, 1: 0}
 
 # Process CSV in chunks
-for chunk in pd.read_csv(csv_path, chunksize=chunksize, usecols=['label']):
-    counts = chunk['label'].value_counts()
+for chunk in pd.read_csv(csv_path, chunksize=chunksize, usecols=["label"]):
+    counts = chunk["label"].value_counts()
     for label, count in counts.items():
         if label in label_counts:
             label_counts[label] += count

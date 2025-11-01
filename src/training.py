@@ -24,56 +24,60 @@ print(f"Raw rows: {df.shape[0]} columns: {df.shape[1]}")
 # ------------------------------
 # Drop useless columns
 # ------------------------------
-drop_cols = ['Unnamed: 0', 'avclass']
+drop_cols = ["Unnamed: 0", "avclass"]
 df = df.drop(columns=drop_cols)
 print(f"Dropped {len(drop_cols)} useless columns")
 
 # ------------------------------
 # Convert 'appeared' to numeric year
 # ------------------------------
-df['appeared_year'] = pd.to_datetime(df['appeared'], errors='coerce').dt.year
-df = df.drop(columns=['appeared'])
+df["appeared_year"] = pd.to_datetime(df["appeared"], errors="coerce").dt.year
+df = df.drop(columns=["appeared"])
 
 # ------------------------------
 # Convert string-list columns to numeric features
 # ------------------------------
-list_cols = ['histogram', 'byteentropy', 'paths', 'urls', 'registry', 'datadirectories']
+list_cols = ["histogram", "byteentropy", "paths", "urls", "registry", "datadirectories"]
 for col in list_cols:
-    df[col + '_array'] = df[col].apply(
-        lambda x: [float(i) if i.replace('.', '', 1).isdigit() else 0 for i in str(x).split('|')]
+    df[col + "_array"] = df[col].apply(
+        lambda x: [
+            float(i) if i.replace(".", "", 1).isdigit() else 0
+            for i in str(x).split("|")
+        ]
     )
-    df[col + '_sum'] = df[col + '_array'].apply(np.sum)
-    df[col + '_mean'] = df[col + '_array'].apply(np.mean)
-    df = df.drop(columns=[col, col + '_array'])
+    df[col + "_sum"] = df[col + "_array"].apply(np.sum)
+    df[col + "_mean"] = df[col + "_array"].apply(np.mean)
+    df = df.drop(columns=[col, col + "_array"])
 
 # ------------------------------
 # Drop remaining object columns
 # ------------------------------
-obj_cols = df.select_dtypes(include='object').columns
+obj_cols = df.select_dtypes(include="object").columns
 df = df.drop(columns=obj_cols)
 
 # ------------------------------
 # Check for duplicates by sha256 (if still present)
 # ------------------------------
-if 'sha256' in df.columns:
-    duplicates = df.duplicated(subset=['sha256']).sum()
+if "sha256" in df.columns:
+    duplicates = df.duplicated(subset=["sha256"]).sum()
     print(f"Dropped {duplicates} exact sha256 duplicates (if any).")
-    df = df.drop_duplicates(subset=['sha256'])
+    df = df.drop_duplicates(subset=["sha256"])
 
 # ------------------------------
 # Split features and target
 # ------------------------------
-X = df.drop(columns=['label'])
-y = df['label']
+X = df.drop(columns=["label"])
+y = df["label"]
 
 # ------------------------------
 # Stratified train/test split
 # ------------------------------
 X_train, X_test, y_train, y_test = train_test_split(
-    X, y,
+    X,
+    y,
     test_size=TEST_SIZE,
     random_state=RANDOM_STATE,
-    stratify=y  # preserves label proportions in both sets
+    stratify=y,  # preserves label proportions in both sets
 )
 
 print(f"Train rows: {X_train.shape[0]} Test rows: {X_test.shape[0]}")
