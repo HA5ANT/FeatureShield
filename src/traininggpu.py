@@ -1,6 +1,6 @@
 import pandas as pd  # DataFrame operations and CSV loading
 import numpy as np  # Numerical operations on arrays and lists
-from sklearn.ensemble import RandomForestClassifier  # Random Forest classifier implementation
+import xgboost as xgb  # XGBoost classifier with GPU support
 from sklearn.model_selection import train_test_split  # Utility to split data into train/test sets
 from sklearn.metrics import classification_report, confusion_matrix  # Evaluation metrics
 import joblib  # Model persistence (save/load trained models)
@@ -10,8 +10,8 @@ import joblib  # Model persistence (save/load trained models)
 # ------------------------------
 # Absolute path to the training CSV containing features and labels
 DATA_PATH = r"E:\code\FeatureShield_Phase1_clean\data\raw\train_features.csv"
-# Absolute path where the trained Random Forest model will be saved
-MODEL_PATH = r"E:\code\FeatureShield_Phase1_clean\models\random_forest_ember.joblib"
+# Absolute path where the trained XGBoost model will be saved (native XGBoost format)
+MODEL_PATH = r"E:\code\FeatureShield_Phase1_clean\models\xgboost_ember.json"
 # Number of rows to read from the CSV for faster experimentation (use None to read all)
 NROWS = 500000  # Adjust upward for better performance estimates if compute allows
 # Proportion of samples to include in the test split (20% test, 80% train)
@@ -22,76 +22,64 @@ RANDOM_STATE = 42
 # ------------------------------
 # Load a subset (or full set) of rows from the CSV into a DataFrame
 # ------------------------------
-# Inform the user which file is being loaded and how many rows are requested
 print(f"Loading {DATA_PATH} nrows= {NROWS}")
-# Read the CSV; if NROWS is an int, read only that many rows for speed
 df = pd.read_csv(DATA_PATH, nrows=NROWS)
-# Report the initial shape of the raw dataset
 print(f"Raw rows: {df.shape[0]} columns: {df.shape[1]}")
 
 # ------------------------------
 # Drop columns known to be non-informative for modeling
 # ------------------------------
-# "Unnamed: 0" is a typical index artifact from prior saves; "avclass" is metadata
 drop_cols = ["Unnamed: 0", "avclass"]
-# Remove these columns from the DataFrame
 df = df.drop(columns=drop_cols)
-# Log how many predefined useless columns were removed
 print(f"Dropped {len(drop_cols)} useless columns")
 
 # ------------------------------
 # Convert the timestamp-like 'appeared' column into a numeric year feature
 # ------------------------------
-# Parse to datetime; coerce invalid values to NaT; then extract the year as an integer
 df["appeared_year"] = pd.to_datetime(df["appeared"], errors="coerce").dt.year
-# Drop the original textual datetime column to avoid leakage/redundancy
-df = df.drop(columns=["appeared"])
+df = df.drop(columns=["appeared"])  # remove the original textual datetime column
 
 # ------------------------------
 # Convert string-encoded lists (pipe-delimited) into aggregate numeric features
 # ------------------------------
-# These columns may contain strings like "0.1|0.2|0.3" or mixed tokens; we summarize them
 list_cols = ["histogram", "byteentropy", "paths", "urls", "registry", "datadirectories"]
 for col in list_cols:
-    # Split each string by '|' into tokens; convert numeric-looking tokens to float, else 0
     df[col + "_array"] = df[col].apply(
         lambda x: [
             float(i) if i.replace(".", "", 1).isdigit() else 0
             for i in str(x).split("|")
         ]
     )
-    # Compute aggregate statistics from the parsed numeric list
     df[col + "_sum"] = df[col + "_array"].apply(np.sum)
     df[col + "_mean"] = df[col + "_array"].apply(np.mean)
-    # Drop the original text column and the temporary array column to keep the feature space clean
-    df = df.drop(columns=[col, col + "_array"])
+    df = df.drop(columns=[col, col + "_array"])  # drop original and temp array columns
 
 # ------------------------------
 # Drop any remaining non-numeric (object) columns to ensure the model sees only numbers
 # ------------------------------
-# Identify object-typed columns after prior transformations
 obj_cols = df.select_dtypes(include="object").columns
-# Remove them to avoid issues with scikit-learn estimators expecting numeric input
 df = df.drop(columns=obj_cols)
 
 # ------------------------------
 # Remove exact duplicate samples identified by the 'sha256' identifier, if available
 # ------------------------------
-# Only proceed if the unique identifier column is present after prior drops
 if "sha256" in df.columns:
-    # Count duplicates to report how many will be removed
     duplicates = df.duplicated(subset=["sha256"]).sum()
     print(f"Dropped {duplicates} exact sha256 duplicates (if any).")
-    # Keep the first occurrence and drop subsequent duplicates
     df = df.drop_duplicates(subset=["sha256"])
 
 # ------------------------------
 # Separate features matrix X and target vector y
 # ------------------------------
-# Features: all columns except the supervised learning target 'label'
 X = df.drop(columns=["label"])
-# Target: the binary/multiclass label column for classification
 y = df["label"]
+
+# Clean numeric features: replace inf/-inf with NaN, then fill NaNs
+X = X.replace([np.inf, -np.inf], np.nan)
+X = X.fillna(0)
+
+# XGBoost/GPU prefers float32 inputs to save memory and match GPU precision
+X = X.astype(np.float32)
 
 # ------------------------------
 # Create stratified train/test splits to preserve class distribution
@@ -101,41 +89,82 @@ X_train, X_test, y_train, y_test = train_test_split(
     y,
     test_size=TEST_SIZE,
     random_state=RANDOM_STATE,
-    stratify=y,  # Maintain label proportions across splits
+    stratify=y,
 )
 
-# Report the split sizes and final dimensionality of the feature space
 print(f"Train rows: {X_train.shape[0]} Test rows: {X_test.shape[0]}")
 print(f"Final feature count: {X_train.shape[1]}")
 
 # ------------------------------
-# Initialize and train a Random Forest classifier on the training data
+# Handle class imbalance (binary only) via scale_pos_weight = neg/pos
 # ------------------------------
-# Use 100 trees for a balance of performance and speed; fix seed for reproducibility
-rf = RandomForestClassifier(n_estimators=100, random_state=RANDOM_STATE)
-# Fit the model to the training features and labels
-rf.fit(X_train, y_train)
+unique_labels = np.unique(y_train)
+scale_pos_weight = None
+if unique_labels.shape[0] == 2:
+    num_pos = (y_train == unique_labels.max()).sum()
+    num_neg = (y_train == unique_labels.min()).sum()
+    if num_pos > 0:
+        scale_pos_weight = float(num_neg) / float(num_pos)
+        print(f"Computed scale_pos_weight (binary): {scale_pos_weight:.4f}")
+
+# ------------------------------
+# Initialize and train an XGBoost classifier on the GPU
+# ------------------------------
+gpu_params = dict(
+    n_estimators=300,
+    max_depth=8,
+    learning_rate=0.05,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    random_state=RANDOM_STATE,
+    tree_method="gpu_hist",     # GPU training
+    predictor="gpu_predictor",  # GPU inference
+    eval_metric="logloss",
+    n_jobs=0,                    # let the GPU do the work
+)
+if scale_pos_weight is not None:
+    gpu_params["scale_pos_weight"] = scale_pos_weight
+
+cpu_params = dict(gpu_params)
+cpu_params["tree_method"] = "hist"
+cpu_params["predictor"] = "auto"
+
+model = xgb.XGBClassifier(**gpu_params)
+
+# Optional: early stopping for faster/better training; disable verbose printing
+try:
+    model.fit(
+        X_train,
+        y_train,
+        eval_set=[(X_test, y_test)],
+        verbose=False,
+        early_stopping_rounds=50,
+    )
+except Exception as e:
+    print(f"GPU training failed ({e}). Falling back to CPU 'hist' tree method.")
+    model = xgb.XGBClassifier(**cpu_params)
+    model.fit(
+        X_train,
+        y_train,
+        eval_set=[(X_test, y_test)],
+        verbose=False,
+        early_stopping_rounds=50,
+    )
 
 # ------------------------------
 # Evaluate the trained model on the held-out test set
 # ------------------------------
-# Predict class labels for the test set
-y_pred = rf.predict(X_test)
-# Print a detailed precision/recall/F1 support report by class
+y_pred = model.predict(X_test)
 print("\nClassification report (test set):\n")
 print(classification_report(y_test, y_pred))
-
-# Show the confusion matrix to visualize true/false positives/negatives
 print("Confusion matrix:\n", confusion_matrix(y_test, y_pred))
-# Report accuracy on training data to gauge potential overfitting
-print("Training accuracy:", rf.score(X_train, y_train))
-# Report accuracy on test data as the primary generalization metric
-print("Test accuracy   :", rf.score(X_test, y_test))
+print("Training accuracy:", model.score(X_train, y_train))
+print("Test accuracy   :", model.score(X_test, y_test))
 
 # ------------------------------
-# Persist the trained model to disk for later inference/use
+# Persist the trained model to disk for later inference/use (native XGBoost format)
 # ------------------------------
-# Save using joblib which is efficient for scikit-learn estimators
-joblib.dump(rf, MODEL_PATH)
-# Confirm the output path so downstream steps know where to load from
+model.save_model(MODEL_PATH)
 print(f"Saved model to {MODEL_PATH}")
+
+

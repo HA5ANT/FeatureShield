@@ -1,6 +1,6 @@
 ## FeatureShield — Phase 1
 
-Prototype for training and evaluating a Random Forest on EMBER-style tabular features. The pipeline performs lightweight preprocessing, stratified splitting, model evaluation, and exports a persisted classifier.
+Prototype for training and evaluating models on EMBER-style tabular features. Includes a CPU Random Forest pipeline and a GPU-accelerated XGBoost pipeline. Both perform lightweight preprocessing, stratified splitting, model evaluation, and export a persisted classifier.
 
 ---
 
@@ -9,8 +9,10 @@ Prototype for training and evaluating a Random Forest on EMBER-style tabular fea
 - `data/raw/train_features.csv`: Input features CSV (EMBER-style).
 - `data/raw/explore_dataset.ipynb`: Optional EDA notebook.
 - `src/training.py`: End-to-end training and evaluation script.
+- `src/traininggpu.py`: End-to-end training and evaluation script (XGBoost on GPU).
 - `src/test.py`: Utility to compute label distribution over the full dataset in chunks.
 - `models/random_forest_ember.joblib`: Trained model artifact (output).
+- `models/xgboost_ember.joblib`: Trained GPU XGBoost model artifact (output).
 - `requirements.txt`: Python dependencies.
 
 ---
@@ -26,6 +28,7 @@ pip install -r requirements.txt
 
 Notes:
 - Paths in the scripts are currently absolute to `E:\code\FeatureShield_Phase1_clean`. For portability, prefer relative paths like `data/raw/train_features.csv` and `models/random_forest_ember.joblib`.
+- GPU notes: On Windows, the `xgboost` pip wheel includes GPU support. Ensure you have an NVIDIA GPU with a recent driver. No extra CUDA package is typically required beyond the driver for the wheel to use CUDA.
 
 ---
 
@@ -39,7 +42,7 @@ The training script expects at minimum:
 
 ---
 
-### Train and evaluate
+### Train and evaluate (CPU, Random Forest)
 
 ```powershell
 python src/training.py
@@ -70,6 +73,34 @@ Tip: For stronger duplicate isolation, consider a group-aware split such as `Gro
 
 ---
 
+### Train and evaluate (GPU, XGBoost)
+
+```powershell
+python src/traininggpu.py
+```
+
+Config in `src/traininggpu.py`:
+
+```text
+DATA_PATH    = E:\code\FeatureShield_Phase1_clean\data\raw\train_features.csv
+MODEL_PATH   = E:\code\FeatureShield_Phase1_clean\models\xgboost_ember.joblib
+NROWS        = 500000
+TEST_SIZE    = 0.2
+RANDOM_STATE = 42
+```
+
+What it does (differences vs CPU version):
+- Uses `xgboost.XGBClassifier` with `tree_method="gpu_hist"` and `predictor="gpu_predictor"` for CUDA acceleration.
+- Casts features to `float32` to reduce VRAM usage and match GPU precision.
+- Adds optional early stopping with `eval_set=[(X_test, y_test)]` and `early_stopping_rounds=50`.
+- Saves the model to `models/xgboost_ember.joblib`.
+
+Notes:
+- Keep `NROWS` within your GPU VRAM capacity. If you hit OOM, reduce `NROWS` or tune model parameters (`max_depth`, `n_estimators`).
+- The preprocessing pipeline mirrors the CPU script so both models are trained on the same feature space.
+
+---
+
 ### Inspect label distribution (full CSV)
 
 ```powershell
@@ -85,6 +116,7 @@ python src/test.py
 - Accuracy unusually high: verify stratification and deduplication; consider group-aware split by `sha256`.
 - Memory pressure: reduce `NROWS` in `training.py` or use `src/test.py` for chunked inspection.
 - Path errors: change absolute constants to relative paths in the scripts.
+- GPU not detected: ensure a recent NVIDIA driver is installed. Verify GPU mode by checking that `tree_method="gpu_hist"` is set and watch for GPU utilization with tools like `nvidia-smi`.
 
 ---
 
