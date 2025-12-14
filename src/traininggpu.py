@@ -2,9 +2,12 @@ import pandas as pd  # DataFrame operations and CSV loading
 import numpy as np  # Numerical operations on arrays and lists
 import xgboost as xgb  # XGBoost classifier with GPU support
 from sklearn.model_selection import train_test_split  # Utility to split data into train/test sets
-from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score  # Evaluation metrics
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, precision_score, recall_score, f1_score, roc_curve  # Evaluation metrics
 from sklearn.preprocessing import LabelEncoder  # Encode labels safely
 import joblib  # Model persistence (save/load trained models)
+import matplotlib.pyplot as plt  # Plotting library for visualizations
+import seaborn as sns  # Statistical visualization library
+import os  # For file path operations
 
 # ------------------------------
 # Configuration constants
@@ -264,7 +267,7 @@ except Exception as e:
     print("✓ CPU training successful")
 
 # ------------------------------
-# STEP 14: Comprehensive evaluation with safety checks
+# STEP 14: Comprehensive evaluation with visualizations and metrics table
 # ------------------------------
 print(f"\n{'=' * 80}")
 print("MODEL EVALUATION")
@@ -274,37 +277,126 @@ y_pred = model.predict(X_test)
 y_pred_proba = model.predict_proba(X_test)
 unique_labels = np.unique(y_test)  # Define for ROC-AUC check
 
-
 # Training and test accuracy
 train_acc = model.score(X_train, y_train)
 test_acc = model.score(X_test, y_test)
 
-print(f"\nTraining Accuracy: {train_acc:.4f}")
-print(f"Test Accuracy:     {test_acc:.4f}")
-
-# Classification report
-print(f"\n{'─' * 80}")
-print("CLASSIFICATION REPORT (Test Set)")
-print("─" * 80)
-print(classification_report(y_test, y_pred, zero_division=0))
-
-# Confusion matrix with explicit labels
-print(f"{'─' * 80}")
-print("CONFUSION MATRIX")
-print("─" * 80)
-cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
-print(cm)
-print(f"\nFormat: [[TN, FP],\n         [FN, TP]]")
+# Calculate metrics
+precision = precision_score(y_test, y_pred, zero_division=0)
+recall = recall_score(y_test, y_pred, zero_division=0)
+f1 = f1_score(y_test, y_pred, zero_division=0)
 
 # ROC-AUC score (only for binary classification)
+roc_auc = None
 if len(unique_labels) == 2 and y_pred_proba.shape[1] == 2:
     try:
         roc_auc = roc_auc_score(y_test, y_pred_proba[:, 1])
-        print(f"\n{'─' * 80}")
-        print(f"ROC-AUC Score: {roc_auc:.4f}")
-        print("─" * 80)
     except Exception as e:
         print(f"\n⚠️  Could not compute ROC-AUC: {e}")
+
+# Create metrics DataFrame
+metrics_data = {
+    'Metric': ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'ROC-AUC'],
+    'Value': [
+        f"{test_acc:.4f}",
+        f"{precision:.4f}",
+        f"{recall:.4f}",
+        f"{f1:.4f}",
+        f"{roc_auc:.4f}" if roc_auc is not None else "N/A"
+    ]
+}
+metrics_df = pd.DataFrame(metrics_data)
+
+# Export metrics to CSV
+output_dir = os.path.dirname(MODEL_PATH)
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
+metrics_csv_path = os.path.join(output_dir, "model_metrics.csv")
+metrics_df.to_csv(metrics_csv_path, index=False)
+print(f"\n✓ Metrics table exported to: {metrics_csv_path}")
+
+# Set style for professional visualizations
+sns.set_style("whitegrid")
+plt.rcParams['figure.figsize'] = (10, 6)
+plt.rcParams['font.size'] = 11
+plt.rcParams['axes.labelsize'] = 12
+plt.rcParams['axes.titlesize'] = 14
+plt.rcParams['xtick.labelsize'] = 10
+plt.rcParams['ytick.labelsize'] = 10
+
+# ------------------------------
+# 1. Confusion Matrix Heatmap
+# ------------------------------
+cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
+fig, ax = plt.subplots(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=True,
+            xticklabels=['Benign (0)', 'Malware (1)'],
+            yticklabels=['Benign (0)', 'Malware (1)'],
+            ax=ax, annot_kws={'size': 14, 'weight': 'bold'})
+ax.set_xlabel('Predicted Label', fontsize=12, fontweight='bold')
+ax.set_ylabel('True Label', fontsize=12, fontweight='bold')
+ax.set_title('Confusion Matrix', fontsize=16, fontweight='bold', pad=20)
+
+# Add text annotations for TN, FP, FN, TP
+if cm.shape == (2, 2):
+    tn, fp, fn, tp = cm[0, 0], cm[0, 1], cm[1, 0], cm[1, 1]
+    ax.text(0.5, -0.15, f'TN: {tn} | FP: {fp} | FN: {fn} | TP: {tp}',
+            transform=ax.transAxes, ha='center', fontsize=10,
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+plt.tight_layout()
+cm_plot_path = os.path.join(output_dir, "confusion_matrix.png")
+plt.savefig(cm_plot_path, dpi=300, bbox_inches='tight')
+print(f"✓ Confusion matrix saved to: {cm_plot_path}")
+plt.close()
+
+# ------------------------------
+# 2. ROC Curve with AUC
+# ------------------------------
+if len(unique_labels) == 2 and y_pred_proba.shape[1] == 2 and roc_auc is not None:
+    fpr, tpr, thresholds = roc_curve(y_test, y_pred_proba[:, 1])
+    
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.plot(fpr, tpr, color='#2E86AB', lw=2.5, label=f'ROC Curve (AUC = {roc_auc:.4f})')
+    ax.plot([0, 1], [0, 1], color='#A23B72', lw=2, linestyle='--', label='Random Classifier (AUC = 0.5000)')
+    ax.fill_between(fpr, tpr, alpha=0.3, color='#2E86AB')
+    
+    ax.set_xlim([0.0, 1.0])
+    ax.set_ylim([0.0, 1.05])
+    ax.set_xlabel('False Positive Rate (1 - Specificity)', fontsize=12, fontweight='bold')
+    ax.set_ylabel('True Positive Rate (Sensitivity)', fontsize=12, fontweight='bold')
+    ax.set_title('Receiver Operating Characteristic (ROC) Curve', fontsize=16, fontweight='bold', pad=20)
+    ax.legend(loc='lower right', fontsize=11, frameon=True, fancybox=True, shadow=True)
+    ax.grid(True, alpha=0.3, linestyle='--')
+    
+    # Add AUC text box
+    textstr = f'AUC = {roc_auc:.4f}'
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+    ax.text(0.6, 0.2, textstr, fontsize=12, fontweight='bold',
+            verticalalignment='top', bbox=props)
+    
+    plt.tight_layout()
+    roc_plot_path = os.path.join(output_dir, "roc_curve.png")
+    plt.savefig(roc_plot_path, dpi=300, bbox_inches='tight')
+    print(f"✓ ROC curve saved to: {roc_plot_path}")
+    plt.close()
+else:
+    print("⚠️  ROC curve not generated (requires binary classification with valid probabilities)")
+
+# Print summary to console
+print(f"\n{'─' * 80}")
+print("EVALUATION SUMMARY")
+print("─" * 80)
+print(f"Training Accuracy: {train_acc:.4f}")
+print(f"Test Accuracy:     {test_acc:.4f}")
+print(f"Precision:         {precision:.4f}")
+print(f"Recall:            {recall:.4f}")
+print(f"F1-Score:          {f1:.4f}")
+if roc_auc is not None:
+    print(f"ROC-AUC:           {roc_auc:.4f}")
+print(f"\n{'─' * 80}")
+print("Visualizations and metrics table have been saved to the models directory.")
+print("=" * 80)
 
 # ------------------------------
 # STEP 15: Save model
