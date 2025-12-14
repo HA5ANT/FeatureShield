@@ -1,0 +1,39 @@
+FeatureShield — current status and next steps
+
+Current status (what the repo now does)
+
+Loads the EMBER-style CSV, prints global label counts, and creates a balanced working subset via stratified sampling (to avoid the previous single-class / label-collapse problem).
+
+Explicitly filters out unlabeled samples (-1) for binary detection; verifies both classes are present and enforces a minimum number of samples per class.
+
+Parses string-encoded list columns (e.g., histogram, byteentropy, paths, urls, registry, datadirectories) into numeric arrays and generates distributional summary features: sum, mean, std, min, max. This gives the model richer signals than simple aggregates.
+
+Deduplicates exact samples by sha256 before removing object columns.
+
+Encodes labels safely and performs a stratified train/test split; computes scale_pos_weight for class imbalance when appropriate.
+
+Trains an XGBoost classifier configured for GPU (uses tree_method="hist" + device="cuda"), with a CPU fallback. Saves model in XGBoost native format.
+
+Produces robust evaluation: classification report, confusion matrix with explicit labels, ROC-AUC (binary only), and sanity checks for single-class splits.
+
+Immediate problems fixed
+
+Label collapse: previously sampling the first NROWS caused one-class batches. Fixed by loading a large chunk and stratified random sampling (or balanced chunked sampling when needed).
+
+Unlabeled rows (-1): previously caused training errors or silent mis-labeling; now filtered explicitly for binary experiments.
+
+Premature dropping of identifiers: sha256 was dropped before dedupe, enabling leakage; now dedupe runs first.
+
+Feature parsing: naive sum/mean only hid distributional info; now additional stats added to reduce brittle overfitting to trivial artifacts.
+
+Evaluation safety: script now checks that both classes exist in train/test and guards ROC-AUC computation.
+
+Current limitations / caveats
+
+This phase intentionally uses pre-extracted EMBER-style features (no raw binaries, no execution). That is a safety constraint and a design choice.
+
+The balanced sampling reads a large chunk of the CSV; this can be memory-heavy on small machines. Chunked balanced sampling is available (use if memory constrained).
+
+GPU usage depends on the active XGBoost build (we use xgboost==1.7.6 for reliable Windows GPU support) — verify via the included quick GPU test.
+
+The current feature engineering is basic and may not capture all useful structure — it’s meant as a robust baseline.
